@@ -1,0 +1,188 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    name: agent01
+  name: agent01
+spec:
+  containers:
+  - env:
+    - name: POD_LABEL_NAME
+      value: agent01
+    image: registry.cloudclusters.io/cloudclusters/pod-agent:mongo-single-v7
+    name: agent01
+    ports: []
+    resources:
+      limits:
+        cpu: '0.8'
+        memory: 4.00G
+      requests:
+        cpu: '0.2'
+        memory: 1G
+    volumeMounts:
+    - mountPath: /backup
+      name: backup
+  volumes:
+  - name: backup
+    persistentVolumeClaim:
+      claimName: rbd-agent01
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: myservice-pv
+  labels:
+    name: myservice-pv
+spec:
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteMany
+  cephfs:
+    monitors: 
+    - 192.168.1.75:6789
+    - 192.168.1.78:6789
+    - 192.168.1.79:6789
+    path: /backup
+    user: admin
+    secretRef:
+      name: ceph-secret-admin
+    readOnly: false
+  persistentVolumeReclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: myservice-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 2Gi
+  selector:
+    matchLabels:
+      name: myservice-pv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+  labels:
+    app: mongodb-replicaset
+    release: test-1
+  name: test-1-mongodb-replicaset
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 27017
+  selector:
+    app: mongodb-replicaset
+    release: test-1
+    
+---
+    
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: mongodb-replicaset
+    release: test-1
+    statefulset.kubernetes.io/pod-name: test-1-mongodb-replicaset-0
+  name: test-1-mongodb-replicaset-0
+spec:
+  ports:
+  - port: 27017
+    targetPort: 27017
+  selector:
+    statefulset.kubernetes.io/pod-name: test-1-mongodb-replicaset-0
+  type: ClusterIP    
+    
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: mongodb-replicaset
+    release: test-1
+    statefulset.kubernetes.io/pod-name: test-1-mongodb-replicaset-1
+  name: test-1-mongodb-replicaset-1
+spec:
+  ports:
+  - port: 27017
+    targetPort: 27017
+  selector:
+    statefulset.kubernetes.io/pod-name: test-1-mongodb-replicaset-1
+  type: ClusterIP    
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: mongodb-replicaset
+    release: test-1
+    statefulset.kubernetes.io/pod-name: test-1-mongodb-replicaset-2
+  name: test-1-mongodb-replicaset-2
+spec:
+  ports:
+  - port: 27017
+    targetPort: 27017
+  selector:
+    statefulset.kubernetes.io/pod-name: test-1-mongodb-replicaset-2
+  type: ClusterIP  
+  
+---
+
+apiVersion: apps/v1beta2
+kind: StatefulSet
+metadata:
+  labels:
+    app: mongodb-replicaset
+    release: test-1
+  name: test-1-mongodb-replicaset
+spec:
+  selector:
+    matchLabels:
+      app: mongodb-replicaset
+      release: test-1
+  serviceName: test-1-mongodb-replicaset
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: mongodb-replicaset
+        release: test-1
+      annotations:
+    spec:
+      containers:
+        - name: mongodb-replicaset
+          image: "registry.cloudclusters.io/cloudclusters/mongo_cluster:v1"
+          ports:
+            - containerPort: 27017
+          resources:
+            {}              
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: REPLICA_SET
+              value: rs0
+            - name: AUTH
+              value: "true"
+            - name: PEER_ON-START
+              value: "on-start.sh"
+            - name: PEER_SERVICE
+              value: test-1-mongodb-replicaset
+          volumeMounts:
+            - name: datadir
+              mountPath: /data/db
+      volumes:
+        - name: datadir
+          emptyDir: {}

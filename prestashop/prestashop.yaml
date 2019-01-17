@@ -1,0 +1,127 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: >
+  TOSCA description of the Magento application for TriPanels basic plan.
+
+# Repositories to retrieve code artifacts from 
+repositories:
+  tripanels_hub: registry.test.com
+
+imports:
+  # - tripanels: https://
+  - tripanels: tripanels-types.yaml
+
+topology_template:
+  inputs:
+    # plan information
+    num_cpus:
+      type: integer
+    disk_size:
+      type: scalar-unit.size
+    mem_size:
+      type: scalar-unit.size
+    # deployment information
+    stack_name: 
+      type: string  
+    web_host_port:
+      type: integer
+      description: The host port that maps to port 80 of the container.
+    # input information
+    db_root_pwd:
+      required: false
+      type: string
+      default: admin
+      description: Root password for MySQL.
+    db_name:
+      required: false
+      type: string
+      default: prestashop
+      description: The database name of application.
+    db_user:
+      required: false
+      type: string
+      default: prestashop
+      description: The database user name of application.
+    db_password:
+      required: false
+      type: string
+      default: prestashop
+      description: The database user name of application.
+
+  node_templates:
+    prestashop_web:
+      type: tripanels.nodes.Software.WebApplication
+      properties:
+        context_root: /var/www/html
+      requirements:
+        - host: prestashop_container
+        - database_link: prestashop_db
+      capabilities:
+        app_endpoint:
+          properties: 
+            protocol: http
+            port: 80 
+      interfaces:
+        Standard:
+          start:
+            implementation: scripts/web/start.sh
+          stop:
+            implementation: scripts/web/stop.sh
+  
+    prestashop_db:
+      type: tripanels.nodes.Software.Database
+      properties:
+        data_root: /var/lib/mysql
+      requirements:
+        - host: prestashop_container
+      capabilities: 
+        database_link:
+          properties:
+            port: 3306
+   
+    prestashop_container:
+      type: tripanels.nodes.Container.Docker
+      description: 
+      properties:
+        name: prestashop
+        stack_name: { get_input: stack_name }
+      capabilities:
+        host:
+          properties:
+            num_cpus: { get_input: num_cpus }
+            disk_size: { get_input: disk_size }
+            mem_size: { get_input: mem_size }
+            # List of ports mappings from source (Docker container)
+            # to target (host) ports to publish.
+            publish_ports: 
+              - protocol: tcp
+                target: { get_input: web_host_port }
+                source: 80
+            # type: list, entry_schema: type: string
+            volumes:
+              - { get_property: [ prestashop_web, context_root ] }
+              - { get_property: [ prestashop_db, data_root ] }  
+      
+      interfaces:
+        Standard:
+          create:
+            implementation: my_image
+            inputs:
+              DB_ROOTPASSWORD: { get_input: db_root_pwd }
+
+      artifacts:
+        my_image:
+          # file: image
+          tag: prestashop:latest
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          repository: tripanels_hub
+
+  outputs:
+    DB_ROOTPASSWORD: 
+      value: { get_input: db_root_pwd } 
+    DB_NAME:
+      value: { get_input: db_name } 
+    DB_USER: 
+      value: { get_input: db_user } 
+    DB_PASSWORD: 
+      value: { get_input: db_password }

@@ -1,0 +1,162 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: >
+  TOSCA description of the Mysql application for TriPanels basic plan.
+
+# Repositories to retrieve code artifacts from 
+repositories:
+  tripanels_hub: registry.tripanels.com
+
+imports:
+  # - tripanels: https://
+  - tripanels: tripanels-types.yaml
+
+topology_template:
+  inputs:
+    # plan information
+    num_cpus:
+      required: false
+      type: integer
+      default: 1
+    disk_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    mem_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    # deployment information
+    stack_name: 
+      type: string 
+    # input information
+    db_root_pwd:
+      required: false
+      type: string
+      default: mongodb@root
+      description: Root password for mongodb.
+    mysql_port:
+      required: false
+      type: integer
+      default: 3306
+      description: The database user name of application.
+  
+  node_templates:
+    mysql_software:
+      type: tripanels.nodes.Software.Database
+      properties:
+        data_paths:
+          mysql_data: /data/db
+      requirements:
+        - host: mysql_container
+      capabilities: 
+        database_link:
+          properties:
+            port: { get_input: mysql_port }
+    
+    mysql_container:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        env:
+          MYSQL_ROOT_PASS: { get_input: db_root_pwd }          
+      properties:
+        name: { get_input: stack_name }
+        app_name: { get_input: stack_name }
+      capabilities:
+        host:
+          properties:
+            num_cpus: 1
+            disk_size: '2GB'
+            mem_size: '2GB'
+            # List of ports mappings from source (Docker container)
+            publish_ports: 
+              - source: { get_input: mysql_port }
+
+            mounts:
+              - name: data
+                path: { get_property: [mysql_software, data_paths, mongo_data] }
+                target: ""
+      requirements:
+        - host: mysql_pod       
+      
+      interfaces:
+        Standard:
+          create:
+            implementation: image
+            inputs:
+              DB_ROOTPASSWORD: { get_input: db_root_pwd }
+
+      artifacts:
+        image:
+          # file: image
+          tag: mysql:latest
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          repository: tripanels_hub
+    
+    agent:
+      type: tripanels.nodes.Software.Middleware
+      properties:
+        data_paths:
+          data: /data/db
+          backup: /backup
+      requirements:
+        - host: agent_container
+    
+    agent_container:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        env:
+          POD_LABEL_NAME: { get_input: stack_name }
+      properties:
+        name: mongo-agent
+        app_name: { get_input: stack_name }
+      capabilities:
+        host:
+          properties:
+            num_cpus: 1
+            disk_size: "6GB"
+            mem_size: "1GB"
+            # List of ports mappings from source (Docker container)
+            publish_ports: []
+            mounts:
+              - name: data
+                path: { get_property: [agent, data_paths, data] }
+                target: ""
+              - name: backup
+                path: { get_property: [agent, data_paths, backup] }
+                target: ""
+      requirements:
+        - host: mysql_pod 
+
+      interfaces:
+        Standard:
+          create:
+            implementation: agent_image
+
+      artifacts:
+        agent_image:
+          # file: image
+          tag: agenttest04:latest
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          repository: tripanels_hub
+      
+    mysql_pod:
+      type: tripanels.nodes.Container.Pod
+      description: 
+      properties:
+        name: { get_input: stack_name }
+        app_name: { get_input: stack_name }
+      
+      capabilities:
+        host:
+          properties:
+            num_cpus: { get_input: num_cpus }
+            disk_size: { get_input: disk_size }
+            mem_size: { get_input: mem_size }
+              
+        scalable:
+          properties:
+            min_instances: 1
+            max_instances: 1

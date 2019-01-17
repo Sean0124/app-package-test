@@ -1,0 +1,113 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: Definition of the custom types of TriPanels tosca template.
+
+node_types:
+  tripanels.nodes.Root:
+    derived_from: tosca.nodes.Root
+  
+  tripanels.nodes.Container:
+    derived_from: tripanels.nodes.Root
+    attributes:
+      id:
+        type: string
+      name:
+        type: string
+      host_id:
+        type: string
+      host_name:
+        type: string
+    properties:
+      title:
+        required: false
+        type: string
+      name: 
+        required: true
+        type: string
+      stack_name:
+        required: true
+        type: string
+    capabilities:
+      host:
+        type: tosca.capabilities.Container
+      os:
+        type: tosca.capabilities.OperatingSystem
+
+  tripanels.nodes.Container.Docker:
+    derived_from: tripanels.nodes.Container
+    capabilities:
+      host:
+        type: tosca.capabilities.Container.Docker
+      os:
+        type: tosca.capabilities.OperatingSystem
+  
+  tripanels.nodes.Software:
+    derived_from: tripanels.nodes.Root
+    properties:
+    version:
+        required: false
+        type: string
+    requirements:
+      - host:
+          capability: tosca.capabilities.Container
+          node: tripanels.nodes.Root
+          relationship: tosca.relationships.HostedOn
+
+  tripanels.nodes.Software.Database:
+    derived_from: tripanels.nodes.Software
+    properties:
+      port:
+        required: false
+        type: integer
+        description:  >
+          The port the database service will use to listen for incoming data and
+          requests.
+      root_password:
+        required: false
+        type: string
+        description: >
+          The root password for the DBMS service.
+      data_root:
+        required: false
+        type: string
+        description:  >
+          The root path the database service will use to put data.
+    requirements:
+      - host:
+          capability: tosca.capabilities.Container
+          node: tripanels.nodes.Root
+          relationship: tosca.relationships.HostedOn
+    capabilities:
+      database_link:
+        type: tosca.capabilities.Endpoint.Database
+  
+  tripanels.nodes.Software.WebApplication:
+    derived_from: tripanels.nodes.Software
+    properties:
+      context_root:
+        type: string
+        required: false
+    requirements:
+      - host:
+          capability: tripanels.nodes.Container.Docker
+          node: tripanels.nodes.Root
+          relationship: tosca.relationships.HostedOn
+      - database_link:
+          capability: tosca.capabilities.Endpoint
+          node: tripanels.nodes.Software.Database
+          relationship: tosca.relationships.ConnectsTo
+    capabilities:
+      admin_endpoint:
+        type: tosca.capabilities.Endpoint.Admin
+      app_endpoint:
+        type: tosca.capabilities.Endpoint
+  
+  tripanels.nodes.Volume:
+    derived_from: tripanels.nodes.Root
+    capabilities:
+      attachment:
+        type: tosca.capabilities.Attachment
+        valid_source_types: [tosker.nodes.Container]
+        occurrences: [0, UNBOUNDED]
+
+

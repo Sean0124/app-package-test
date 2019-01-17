@@ -1,0 +1,365 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: >
+  TOSCA description of the MongoDB application for clusters plan.
+
+# Repositories to retrieve code artifacts from 
+repositories:
+  tripanels_hub: registry.tripanels.com
+  cloudclusters: registry.cloudclusters.io
+
+imports:
+  - tripanels: http://gitlab.databasemart.net/public-app/app-package-test/raw/master/tripanels-types.yaml
+  #- tripanels: ../tripanels-types.yaml
+
+topology_template:
+  inputs:
+    # plan information
+    num_cpus:
+      required: false
+      type: integer
+      default: 1
+    disk_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    mem_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    instances:
+      required: false
+      type: integer
+      default: 3
+    instances_env: 
+      required: false
+      type: string
+      default: '3'
+    # deployment information
+    stack_name:
+      required: true
+      type: string 
+    
+    # input information
+    db_root_pwd:
+      required: false
+      type: string
+      default: cockroach@root
+      description: Root password for cockroach.
+    grpc_port:
+      required: false
+      type: integer
+      default: 26257
+    http_port:
+      required: false
+      type: integer
+      default: 8080
+    api_port:
+      required: false
+      type: integer
+      default: 33090
+    domain_name: 
+      required: true
+      type: string
+      default: cockroach001.cloudclusters.io
+  
+  node_templates:
+    init-certs-c:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: STACK_NAME
+            value: { get_input: stack_name } 
+      properties:
+        name: init-certs-c
+        app_name: { get_input: stack_name }
+        kind: Init
+      capabilities:
+        host:
+          properties:
+            mounts:
+              - name: certs
+                path: /cockroach-certs
+                target: "emptyDir"
+      requirements:
+        - host: cockroach-p
+      interfaces:
+        Standard:
+          create:
+            implementation: docker-image
+          start: 
+            implementation: 
+              - "/bin/ash"
+              - "-ecx"
+              - "/request-cert -namespace=${POD_NAMESPACE} -certs-dir=/cockroach-certs -type=node -addresses=localhost,127.0.0.1,$(hostname -f),$(hostname -f|cut -f 1-2 -d '.'),${STACK_NAME}-cockroach-p,${STACK_NAME}-cockroach-p.$(hostname -f|cut -f 3- -d '.'),$(hostname).$(hostname -f|cut -f 5-6 -d '.'),${STACK_NAME}.$(hostname -f|cut -f 5-6 -d '.') -symlink-ca-from=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+      artifacts:
+        docker-image:
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          tag: cloudclusters/cockroach-k8s-request-cert:0.3 
+          repository: cloudclusters
+          imagePullPolicy: IfNotPresent
+      
+    init-rootcerts-c:
+        type: tripanels.nodes.Container.Docker
+        description:
+        attributes:
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: STACK_NAME
+              value: { get_input: stack_name }
+        properties:
+          name: init-rootcerts-c
+          app_name: { get_input: stack_name }
+          kind: Init
+        capabilities:
+          host:
+            properties:
+              mounts:
+                - name: certs
+                  path: /cockroach-certs
+                  target: "emptyDir"
+        requirements:
+          - host: cockroach-p 
+          - host: cockroach-job-p
+        interfaces:
+          Standard:
+            create:
+              implementation: docker-image
+            start: 
+              implementation: 
+                - "/bin/ash"
+                - "-ecx"
+                - "/request-cert -namespace=${POD_NAMESPACE} -certs-dir=/cockroach-certs -type=client -user=root -symlink-ca-from=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+        artifacts:
+          docker-image:
+            type: tosca.artifacts.Deployment.Image.Container.Docker
+            tag: cloudclusters/cockroach-k8s-request-cert:0.3 
+            repository: cloudclusters
+            imagePullPolicy: IfNotPresent
+      
+    cockroach-c:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        requests:
+          num_cpus: 0.1
+          mem_size: "100MB"
+        env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: COCKROACH_CHANNEL
+            value: kubernetes-secure
+          - name: STACK_NAME
+            value: { get_input: stack_name }
+        # prob:
+        #   livenessProbe:
+      properties:
+        name: cockroachdb
+        app_name: { get_input: stack_name }
+        kind: Regular
+      capabilities:
+        host:
+          properties:
+            num_cpus: { get_input: num_cpus }
+            disk_size: { get_input: disk_size }
+            mem_size: { get_input: mem_size }
+            # List of ports mappings from source (Docker container)
+            publish_ports: 
+              - source: { get_input: grpc_port }
+                target: { get_input: grpc_port }
+              - source: { get_input: http_port }
+                target: { get_input: http_port }
+              - source: { get_input: api_port }
+                target: 5001  
+              - source: 30101
+                target: 30101 
+            mounts:
+              - name: datadir
+                path: /cockroach/cockroach-data
+                # { get_attribute: [mongo_software, configurations, storage, dbPath] }
+                # emptyDir, hostPath, rbd, cephfs
+                target: "rbd"
+              - name: certs
+                path: /cockroach/cockroach-certs
+                target: "emptyDir"
+
+      requirements:
+        - host: cockroach-p      
+      
+      interfaces:
+        Standard:
+          create:
+            implementation: docker-image
+            inputs:
+          start: 
+            implementation: 
+              - "/bin/bash"
+              - "-ecx"
+              # The use of qualified `hostname -f` is crucial:
+              # Other nodes aren't able to look up the unqualified hostname.
+              - "exec /cockroach/cockroach start --logtostderr --certs-dir /cockroach/cockroach-certs --advertise-host $(hostname -f) --http-host 0.0.0.0 --join ${STACK_NAME}-cockroach-p-0.${STACK_NAME}-cockroach-p-headless,${STACK_NAME}-cockroach-p-1.${STACK_NAME}-cockroach-p-headless,${STACK_NAME}-cockroach-p-2.${STACK_NAME}-cockroach-p-headless"                
+      artifacts:
+        docker-image:
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          tag: cloudclusters/cockroach:cockroachdb-test-v1.0
+          repository: cloudclusters
+          policy: IfNotPresent
+          
+    agent-c:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        requests:
+          num_cpus: 0.1
+          mem_size: "100MB"
+        env:
+          - name: POD_LABEL_NAME
+            value: { get_input: stack_name }
+          - name: STACK_NAME
+            value: { get_input: stack_name }
+      properties:
+        name: cockroach-agent
+        app_name: { get_input: stack_name }
+        kind: Regular
+      capabilities:
+        host:
+          properties:
+            num_cpus: 1
+            mem_size: "1GB"
+            mounts:
+              - name: datadir
+                path: /cockroach/cockroach-data
+                target: "rbd"
+              - name: certs
+                path: /cockroach/cockroach-certs
+                target: "emptyDir"
+              - name: backup
+                path: /backup
+                target: "dbPath" # "cephfs"
+      requirements:
+        - host: cockroach-p 
+      interfaces:
+        Standard:
+          create:
+            implementation: docker-image
+      artifacts:
+        docker-image:
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          tag: cloudclusters/pod-agent:cockroachdb-test-v1.1.1 
+          repository: cloudclusters
+          imagePullPolicy: IfNotPresent
+    
+    job-c:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        env:
+          - name: STACK_NAME
+            value: { get_input: stack_name }
+          - name: replicas
+            value: { get_input: instances_env }
+      properties:
+        name: job-c
+        app_name: { get_input: stack_name }
+        kind: Regular
+      capabilities:
+        host:
+          properties:
+            mounts:
+              - name: certs
+                path: /cockroach-certs
+                target: "emptyDir"
+      requirements:
+        - host: cockroach-job-p 
+      interfaces:
+        Standard:
+          create:
+            implementation: docker-image
+          start:
+            implementation:
+              - "/bin/bash"
+              - "-ecx"
+              - "/cockroach/cockroach init --certs-dir=/cockroach-certs --host=${STACK_NAME}-cockroach-p-0.${STACK_NAME}-cockroach-p-headless && if [[ $replicas -eq 1 ]] ;then /cockroach/cockroach zone set .default --disable-replication --certs-dir=/cockroach-certs/ --host=${STACK_NAME}-cockroach-p-0.${STACK_NAME}-cockroach-p-headless; else echo replicas is $replicas; fi"
+      artifacts:
+        docker-image:
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          tag: cloudclusters/cockroach:cockroachdb-test-v1.0
+          repository: cloudclusters
+          imagePullPolicy: IfNotPresent
+
+    cockroach-p:
+      type: tripanels.nodes.Container.Pod
+      description:
+      attributes:
+        policies:
+          - kind: ServiceType # LoadBalancer, ClusterIP
+            value: LoadBalancer
+          - kind: PodDisruptionBudget
+            value:
+              maxUnavailable: 1
+          - kind: PublicService
+            value: Single   # valid_values: [Single, Multiple]
+          - kind: restartPolicy
+            value: Always   # valid_values: [ Always, Never, OnFailure ]
+          - kind: ServiceAnnotations #HeadlessServiceAnnotations
+            value:
+              #service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+              prometheus.io/scrape: "true"
+              prometheus.io/path: "metrics"
+              prometheus.io/port: "30101"
+              prometheus.io/scheme: "http"
+          - kind: PodAnnotations #HeadlessServiceAnnotations
+            value:
+              prometheus.io/scrape: "true"
+              prometheus.io/path: "_status/vars"
+              prometheus.io/port: "8080"
+              prometheus.io/scheme: "https"
+          - kind: terminationGracePeriodSeconds
+            value: 60
+          - kind: podManagementPolicy
+            value: Parallel
+          - kind: updateStrategy
+            value:
+              type: RollingUpdate
+ 
+      properties:
+        name: cockroach-p
+        app_name: { get_input: stack_name }
+        kind: StatefulSet
+
+      requirements:
+        - job: cockroach-job-p
+      capabilities:
+        scalable:
+          properties:
+            min_instances: { get_input: instances }
+            max_instances: { get_input: instances }
+    
+    cockroach-job-p:
+      type: tripanels.nodes.Container.Pod
+      description:
+      attributes:
+        policies:
+          - kind: restartPolicy
+            value: OnFailure   # valid_values: [ Always, Never, OnFailure ]
+      properties:
+        name: cockroach-job-p
+        app_name: { get_input: stack_name }
+        kind: Job
+      capabilities:
+        scalable:
+          properties:
+            min_instances: 1
+            max_instances: 1
+        

@@ -1,0 +1,109 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: >
+  TOSCA description of the Magento application for TriPanels basic plan.
+
+# Repositories to retrieve code artifacts from 
+repositories:
+  tripanels_hub: registry.tripanels.com
+
+imports:
+  # - tripanels: https://
+  - tripanels: tripanels-types.yaml
+
+topology_template:
+  inputs:
+    # plan information
+    num_cpus:
+      type: integer
+    disk_size:
+      type: scalar-unit.size
+    mem_size:
+      type: scalar-unit.size
+    # deployment information
+    stack_name: 
+      type: string 
+    # input information
+    db_root_pwd:
+      required: false
+      type: string
+      default: admin
+      description: Root password for MySQL.
+    mongo_port:
+      required: false
+      type: integer
+      default: 27017
+      description: The database user name of application.
+  
+  node_templates:
+    mongo_software:
+      type: tripanels.nodes.Software.Database
+      properties:
+        data_paths:
+          mongo_data: /data/db
+      requirements:
+        - host: mongo_container
+      capabilities: 
+        database_link:
+          properties:
+            port: { get_input: mongo_port }
+    
+    mongo_container:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        env:
+          MONGODB_ROOT_PASS: { get_input: db_root_pwd }
+
+      properties:
+        name: { get_input: stack_name }
+        app_name: { get_input: stack_name }
+      capabilities:
+        host:
+          properties:
+            num_cpus: 1
+            disk_size: "6GB"
+            mem_size: "1GB"
+            # List of ports mappings from source (Docker container)
+            publish_ports: 
+              - source: { get_input: mongo_port }
+            mounts:
+              - name: mongo
+                path: { get_property: [mongo_software, data_paths, mongo_data] }
+                target: ""
+
+      requirements:
+        - host: mongo_pod       
+      
+      interfaces:
+        Standard:
+          create:
+            implementation: mongo_image
+            inputs:
+              DB_ROOTPASSWORD: { get_input: db_root_pwd }
+
+      artifacts:
+        mongo_image:
+          # file: image
+          tag: mongo-pass:latest
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          repository: tripanels_hub
+      
+    mongo_pod:
+      type: tripanels.nodes.Container.Pod
+      description: 
+      properties:
+        name: { get_input: stack_name }
+        app_name: { get_input: stack_name }
+      
+      capabilities:
+        host:
+          properties:
+            num_cpus: { get_input: num_cpus }
+            disk_size: { get_input: disk_size }
+            mem_size: { get_input: mem_size }
+              
+        scalable:
+          properties:
+            min_instances: 1
+            max_instances: 1

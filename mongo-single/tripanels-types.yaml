@@ -1,0 +1,183 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: Definition of the custom types of TriPanels tosca template.
+
+##########################################################################
+# Node Type.
+# A Node Type is a reusable entity that defines the type of one or more
+# Node Templates.
+##########################################################################
+node_types:
+  tripanels.nodes.Root:
+    derived_from: tosca.nodes.Root
+  
+  tripanels.nodes.Software:
+    derived_from: tripanels.nodes.Root
+    properties:
+      version:
+        required: false
+        type: string
+      data_paths:
+        required: false
+        type: map
+        entry_schema:
+          type: string   
+    requirements:
+      - host:
+          node: tripanels.nodes.Container
+          relationship: tosca.relationships.HostedOn
+
+  tripanels.nodes.Software.Database:
+    derived_from: tripanels.nodes.Software
+    properties:
+      port:
+        required: false
+        type: integer
+        description:  >
+          The port the database service will use to listen for incoming data and
+          requests.
+      root_password:
+        required: false
+        type: string
+        description: >
+          The root password for the DBMS service.
+    requirements:
+      - host:
+          node: tripanels.nodes.Container
+          relationship: tosca.relationships.HostedOn
+    capabilities:
+      database_link:
+        type: tosca.capabilities.Endpoint.Database
+  
+  tripanels.nodes.Software.WebApplication:
+    derived_from: tripanels.nodes.Software
+    properties:
+      web_server:
+        type: string
+        required: false
+    requirements:
+      - host:
+          node: tripanels.nodes.Container
+          relationship: tosca.relationships.HostedOn
+      - database_link:
+          node: tripanels.nodes.Software.Database
+          relationship: tosca.relationships.ConnectsTo
+    capabilities:
+      admin_endpoint:
+        type: tosca.capabilities.Endpoint.Admin
+      app_endpoint:
+        type: tosca.capabilities.Endpoint
+  
+  tripanels.nodes.Software.Middleware:
+    derived_from: tripanels.nodes.Software
+    requirements:
+      - host:
+          node: tripanels.nodes.Container
+          relationship: tosca.relationships.HostedOn
+      - database_link:
+          node: tripanels.nodes.Software.Database
+          relationship: tosca.relationships.ConnectsTo
+    capabilities:
+      admin_endpoint:
+        type: tosca.capabilities.Endpoint.Admin
+      app_endpoint:
+        type: tosca.capabilities.Endpoint
+
+  tripanels.nodes.Container:
+    derived_from: tripanels.nodes.Root
+    properties:
+      title:
+        required: false
+        type: string
+      name: 
+        required: true
+        type: string
+      app_name: 
+        required: true
+        type: string
+    capabilities:
+      host:
+        type: tosca.capabilities.Container
+      os:
+        type: tosca.capabilities.OperatingSystem
+
+  tripanels.nodes.Container.Docker:
+    derived_from: tripanels.nodes.Container
+    requirements:
+      - host:
+          node: tripanels.nodes.Container
+          relationship: tosca.relationships.HostedOn
+    capabilities:
+      host:
+        type: tripanels.capabilities.Container.Docker
+      os:
+        type: tosca.capabilities.OperatingSystem
+  
+  tripanels.nodes.Container.Pod:
+    derived_from: tripanels.nodes.Container
+    properties:
+      restartPolicy:
+        required: false
+        type: string 
+        default: Always
+        constraints:
+          - valid_values: [ Always, Never, OnFailure ]
+    capabilities:
+      host:
+        type: tripanels.capabilities.Container.Pod
+      scalable:
+        type: tosca.capabilities.Scalable
+        
+##########################################################################
+# Capability Type.
+# A Capability Type is a reusable entity that describes a kind of
+# capability that a Node Type can declare to expose.
+##########################################################################
+capability_types:
+  tripanels.capabilities.Root:
+    description: >
+      The TOSCA root Capability Type all other TOSCA base Capability Types
+      derive from.
+
+  tripanels.capabilities.Container.Pod:
+    derived_from: tosca.capabilities.Container
+    properties:
+      volumes:
+        required: false
+        type: list
+        entry_schema:
+          type: string
+  
+  tripanels.capabilities.Container.Docker:
+    derived_from: tosca.capabilities.Container.Docker
+    properties:
+      mounts:
+        type: list
+        entry_schema:
+          type: tripanels.datatypes.MountPoint
+        required: false
+        description: >
+            The optional identifier of an existing storage volume (resource)
+            that should be used to create the container's mount point(s) on.
+
+##########################################################################
+ # Data Type.
+ # A Datatype is a complex data type declaration which contains other
+ # complex or simple data types.
+##########################################################################
+data_types:
+  tripanels.datatypes.Root:
+    derived_from: tosca.datatypes.Root
+    description: >
+      The tripanels root Data Type all other tripanels base Data Types derive from
+  
+  tripanels.datatypes.MountPoint:
+    derived_from: tripanels.datatypes.Root
+    properties:
+      name:
+        type: string
+      path: 
+        type: string
+      target:
+        type: string
+      

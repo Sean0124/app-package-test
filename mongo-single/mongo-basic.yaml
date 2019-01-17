@@ -1,0 +1,299 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: >
+  TOSCA description of the Magento application for TriPanels basic plan.
+
+# Repositories to retrieve code artifacts from 
+repositories:
+  tripanels_hub: registry.cloudclusters.io
+
+imports:
+  # - tripanels: https://
+  - tripanels: tripanels-types.yaml
+
+topology_template:
+  inputs:
+    # plan information
+    num_cpus:
+      required: false
+      type: integer
+      default: 1
+    disk_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    mem_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    cache_limit_size_gb:
+      required: false
+      type: float
+      default: 0.5
+       
+    # deployment information
+    stack_name: 
+      type: string 
+    # input information
+    db_root_pwd:
+      required: false
+      type: string
+      default: mongodb@root
+      description: Root password for mongodb.
+    db_monitor_pwd:
+      required: false
+      type: string
+      default: mongodb@monitor
+      description: monitor password for mongodb.
+    db_backup_pwd:
+      required: false
+      type: string
+      default: mongodb@backup
+      description: backup password for mongodb.
+    db_restore_pwd:
+      required: false
+      type: string
+      default: mongodb@restore
+      description: restore password for mongodb.
+    mongo_port:
+      required: false
+      type: integer
+      default: 27017
+      description: The database user name of application.
+  
+  node_templates:
+    mongo_software:
+      type: tripanels.nodes.Software.Database
+      properties:
+        data_paths:
+          mongo_data: /data/db
+      requirements:
+        - host: mongo-con
+      capabilities: 
+        database_link:
+          properties:
+            port: { get_input: mongo_port }
+    
+    mongo-con:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        requests:
+          num_cpus: 0.1
+          mem_size: "100MB"
+        secrets:
+          - name: mongodb-keys
+            type: Opaque
+            secretName: tls-ca
+            path: /data/secret
+        env:
+          - name: ROOT_PASS
+            value: { get_input: db_root_pwd }
+          - name: MONGODB_MONITOR_PASS
+            value: { get_input: db_monitor_pwd }
+          - name: MONGODB_BACKUP_PASS
+            value: { get_input: db_backup_pwd }
+          - name: MONGODB_RESTORE_PASS
+            value: { get_input: db_restore_pwd }
+        prob:
+          readinessProbe:
+            exec:
+              command:
+                - mongo 
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 25
+            timeoutSeconds: 5
+            failureThreshold: 30
+            periodSeconds: 10
+            successThreshold: 1
+          livenessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 10
+            periodSeconds: 15
+            successThreshold: 1
+        conf:
+          name: mongodconfig
+          path: /data/config
+          shared: true
+          data:
+            dbPath: /data/db
+            cacheSizeGB: { get_input: cache_limit_size_gb } # 0.5
+            logPath: /data/mongod.log
+            port: { get_input: mongo_port }
+            bindIp: 0.0.0.0
+            timeZoneInfo: /usr/share/zoneinfo
+
+          templates:
+            - file: mongod.conf
+              template: | 
+                storage:
+                  dbPath: {{ dbPath }}
+                  journal:
+                    enabled: true
+                  wiredTiger:
+                    engineConfig:
+                      cacheSizeGB: {{ cacheSizeGB }}
+                
+                systemLog:
+                  destination: file
+                  logAppend: true
+                  path: {{ logPath }}
+                
+                net:
+                  port: {{ port }}
+                  bindIp: {{ bindIp }}
+                
+                processManagement:
+                  timeZoneInfo: {{ timeZoneInfo }}
+      properties:
+        name: mongodb 
+        app_name: { get_input: stack_name }
+      capabilities:
+        host:
+          properties:
+            num_cpus: { get_input: num_cpus } 
+            disk_size: { get_input: disk_size }
+            mem_size: { get_input: mem_size }
+            # List of ports mappings from source (Docker container)
+            publish_ports: 
+              - source: { get_input: mongo_port }
+                target: { get_input: mongo_port }
+
+            mounts:
+              - name: data
+                path: { get_property: [mongo_software, data_paths, mongo_data] }
+                target: "rbd"
+
+      requirements:
+        - host: mongo_pod       
+      
+      interfaces:
+        Standard:
+          create:
+            implementation: mongo_image
+            inputs:
+              DB_ROOTPASSWORD: { get_input: db_root_pwd }
+              DB_MONITORPASSWORD: { get_input: db_monitor_pwd }
+              DB_BACKUPPASSWORD: { get_input: db_backup_pwd }
+              DB_RESTOREPASSWORD: { get_input: db_restore_pwd }
+
+      artifacts:
+        mongo_image:
+          # file: image
+          tag: cloudclusters/mongodb:mongo-single-3.6.4-test-v1.0.0
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          repository: tripanels_hub
+    
+    mongo_agent:
+      type: tripanels.nodes.Software.Middleware
+      properties:
+        data_paths:
+          mongo_data: /data/db
+          backup: /backup
+      requirements:
+        - host: agent-con
+    
+    agent-con:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        requests:
+          num_cpus: 0.1
+          disk_size: "6GB"
+          mem_size: "100MB"
+        prob:
+          readinessProbe:
+            tcpSocket:
+              port: 5001
+            initialDelaySeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 30
+            periodSeconds: 10
+            successThreshold: 1
+          livenessProbe:
+            tcpSocket:
+              port: 5001
+            initialDelaySeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 15
+            periodSeconds: 10
+            successThreshold: 1
+        env:
+          - name: ROOT_PASS
+            value: { get_input: db_root_pwd }
+          - name: POD_LABEL_NAME
+            value: { get_input: stack_name }
+          - name: STACK_NAME 
+            value: { get_input: stack_name }
+      properties:
+        name: mongo-agent
+        app_name: { get_input: stack_name }
+      capabilities:
+        host:
+          properties:
+            num_cpus: 1
+            disk_size: "6GB"
+            mem_size: "2GB"
+            # List of ports mappings from source (Docker container)
+            publish_ports: 
+              - source: 33090
+                target: 5001
+              - source: 9001
+                target: 9001
+              - source: 30101
+                target: 30101
+            mounts:
+              - name: data
+                path: { get_property: [mongo_agent, data_paths, mongo_data] }
+                target: "rbd"
+              - name: backup
+                path: { get_property: [mongo_agent, data_paths, backup] }
+                target: "hostPath"
+      requirements:
+        - host: mongo_pod 
+
+      interfaces:
+        Standard:
+          create:
+            implementation: agent_image
+
+      artifacts:
+        agent_image:
+          # file: image
+          tag: cloudclusters/pod-agent:mongo_agent_test_v1.0.1
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          repository: tripanels_hub
+      
+    mongo_pod:
+      type: tripanels.nodes.Container.Pod
+      description: 
+      attributes:
+        policies:
+          - kind: ServiceAnnotations
+            value:
+              prometheus.io/path: metrics
+              prometheus.io/scrape: "true"
+          - kind: ServiceType # LoadBalancer, ClusterIP
+            value: LoadBalancer
+      properties:
+        name: db
+        app_name: { get_input: stack_name }
+      
+      capabilities:
+        host:
+          properties:
+            num_cpus: { get_input: num_cpus }
+            disk_size: { get_input: disk_size }
+            mem_size: { get_input: mem_size }
+              
+        scalable:
+          properties:
+            min_instances: 1
+            max_instances: 1

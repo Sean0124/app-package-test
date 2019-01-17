@@ -1,0 +1,290 @@
+tosca_definitions_version: tosca_simple_yaml_1_0
+
+description: >
+  TOSCA description of the MongoDB application for clusters plan.
+
+# Repositories to retrieve code artifacts from 
+repositories:
+  tripanels_hub: registry.tripanels.com
+  cloudclusters: registry.cloudclusters.io
+
+imports:
+  - tripanels: http://gitlab.databasemart.net/public-app/app-package/raw/master/tripanels-types.yaml
+  #- tripanels: ../tripanels-types.yaml
+
+topology_template:
+  inputs:
+    # plan information
+    num_cpus:
+      required: false
+      type: integer
+      default: 1
+    disk_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    mem_size:
+      required: false
+      type: scalar-unit.size
+      default: 2GB
+    instances:
+      required: false
+      type: integer
+      default: 3
+    # deployment information
+    stack_name: 
+      type: string 
+    # input information
+    db_root_pwd:
+      required: false
+      type: string
+      default: mongodb@root
+      description: Root password for mongodb.
+    mongo_port:
+      required: false
+      type: integer
+      default: 27017
+      description: The database listen port.
+    cache_limit_size_gb:
+      required: false
+      type: float
+      default: 0.5
+  
+  node_templates:
+    mongo_software:
+      type: tripanels.nodes.Software.Database
+      properties:
+        data_paths:
+          mongo_data: /data/db
+      attributes:
+        
+      requirements:
+        - host: mongo-con
+      capabilities: 
+        database_link:
+          properties:
+            port: { get_input: mongo_port }
+    
+    mongo-con:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        requests:
+          num_cpus: 0.1
+          mem_size: "0.1GB"
+        secrets:
+          - name: mongodb-keys
+            type: Opaque
+            secretName: tls-ca 
+            path: /data/secret
+        env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: ROOT_PASS
+            value: { get_input: db_root_pwd }
+          - name: MEMORY_SIZE
+            value: { get_input: mem_size }
+          - name: REPLICA_SET
+            value: rs0
+          - name: AUTH
+            value: 'true'
+          - name: PEER_ON_START
+            value: on-start.sh
+          - name: PEER_SERVICE
+            value: { get_input: stack_name }
+        prob:
+          readinessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 25
+            timeoutSeconds: 5
+            failureThreshold: 30
+            periodSeconds: 10
+            successThreshold: 1
+          livenessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 10
+            periodSeconds: 15
+            successThreshold: 1
+        conf:
+          name: mongodconfig
+          path: /data/config
+          shared: true
+          data:
+            dbPath: /data/db
+            cacheSizeGB: { get_input: cache_limit_size_gb }
+            logPath: /data/mongod.log
+            port: { get_input: mongo_port }
+            bindIp: 0.0.0.0
+            timeZoneInfo: /usr/share/zoneinfo
+          templates:
+            - file: mongod.conf
+              template: | 
+                storage:
+                  dbPath: {{ dbPath }}
+                  journal:
+                    enabled: true
+                  wiredTiger:
+                    engineConfig:
+                      cacheSizeGB: {{ cacheSizeGB }}
+                
+                systemLog:
+                  destination: file
+                  logAppend: true
+                  path: {{ logPath }}
+                
+                net:
+                  port: {{ port }}
+                  bindIp: {{ bindIp }}
+                
+                processManagement:
+                  timeZoneInfo: {{ timeZoneInfo }}
+            
+      properties:
+        name: mongodb 
+        app_name: { get_input: stack_name }
+        
+      capabilities:
+        host:
+          properties:
+            num_cpus: { get_input: num_cpus }
+            disk_size: { get_input: disk_size }
+            mem_size: { get_input: mem_size }
+            # List of ports mappings from source (Docker container)
+            publish_ports: 
+              - source: { get_input: mongo_port }
+                target: { get_input: mongo_port }
+            mounts:
+              - name: data
+                path: { get_property: [mongo_software, data_paths, mongo_data] }
+                # { get_attribute: [mongo_software, configurations, storage, dbPath] }
+                # emptyDir, hostPath, rbd, cephfs
+                target: "rbd"
+                size: '2GB'
+
+      requirements:
+        - host: mongo_pod       
+      
+      interfaces:
+        Standard:
+          create:
+            implementation: mongo_image
+            inputs:
+                     
+      artifacts:
+        mongo_image:
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          tag: cloudclusters/mongodb:mongo-cluster-3.6.4-test-v1.0.0
+          repository: cloudclusters
+    
+    mongo_agent:
+      type: tripanels.nodes.Software.Middleware
+      properties:
+        data_paths:
+          mongo_data: /data/db
+          backup: /backup
+      requirements:
+        - host: agent-con
+    
+    agent-con:
+      type: tripanels.nodes.Container.Docker
+      description:
+      attributes:
+        prob:
+          readinessProbe:
+            tcpSocket:
+              port: 5001
+            initialDelaySeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 30
+            periodSeconds: 10
+            successThreshold: 1
+          livenessProbe:
+            tcpSocket:
+              port: 5001
+            initialDelaySeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 15
+            periodSeconds: 10
+            successThreshold: 1
+        env:
+          - name: ROOT_PASS
+            value: { get_input: db_root_pwd }
+          - name: POD_LABEL_NAME
+            value: { get_input: stack_name }
+          - name: STACK_NAME
+            value: { get_input: stack_name }
+        requests:
+          num_cpus: 0.1
+          mem_size: "100MB"
+      properties:
+        name: mongo-agent
+        app_name: { get_input: stack_name }
+      capabilities:
+        host:
+          properties:
+            num_cpus: 1
+            disk_size: "6GB" 
+            mem_size: "2GB"
+            # List of ports mappings from source (Docker container)
+            publish_ports: 
+              - source: 33090 
+                target: 5001 
+              - source: 9001
+                target: 9001
+              - source: 30101
+                target: 30101
+            mounts:
+              - name: data
+                path: { get_property: [mongo_agent, data_paths, mongo_data] }
+                target: "rbd"
+              - name: backup
+                path: { get_property: [mongo_agent, data_paths, backup] }
+                target: "hostPath"
+      requirements:
+        - host: mongo_pod 
+
+      interfaces:
+        Standard:
+          create:
+            implementation: agent_image
+
+      artifacts:
+        agent_image:
+          type: tosca.artifacts.Deployment.Image.Container.Docker
+          tag: cloudclusters/pod-agent:mongo_agent_test_v1.0.1
+          repository: cloudclusters
+      
+    mongo_pod:
+      type: tripanels.nodes.Container.Pod
+      description: 
+      attributes:
+        policies:
+          - kind: ServiceAnnotations
+            value:
+              prometheus.io/path: metrics
+              prometheus.io/scrape: "true"
+          - kind: ServiceType # LoadBalancer, ClusterIP
+            value: LoadBalancer
+      properties:
+        name: mongodb
+        app_name: { get_input: stack_name }
+      
+      capabilities:
+        scalable:
+          properties:
+            min_instances: 3
+            max_instances: 3
+
