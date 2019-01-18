@@ -264,7 +264,7 @@ topology_template:
       artifacts:
         agent_image:
           type: tosca.artifacts.Deployment.Image.Container.Docker
-          tag: cloudclusters/pod-agent:f9441d8
+          tag: cloudclusters/pod-agent:
           repository: cloudclusters
       
     mongo_pod:
